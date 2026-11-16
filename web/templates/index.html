@@ -1,0 +1,383 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>熬鹰资本仓位监控</title>
+  <script src="https://cdn.jsdelivr.net/npm/chart.js@4.4.6/dist/chart.umd.min.js"></script>
+  <script src="https://unpkg.com/lightweight-charts@4.2.0/dist/lightweight-charts.standalone.production.js"></script>
+  <style>
+    :root {
+      --bg: #0f1419;
+      --card: #1a1f26;
+      --border: #2d3748;
+      --text: #e2e8f0;
+      --muted: #94a3b8;
+      --green: #22c55e;
+      --red: #ef4444;
+      --blue: #3b82f6;
+    }
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+      background: var(--bg);
+      color: var(--text);
+      line-height: 1.5;
+    }
+    .container { max-width: 1400px; margin: 0 auto; padding: 24px; }
+    header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 24px; padding-bottom: 16px; border-bottom: 1px solid var(--border);
+    }
+    h1 { font-size: 1.5rem; font-weight: 600; }
+    .status { font-size: 0.875rem; color: var(--muted); }
+    .status.ok { color: var(--green); }
+    .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; }
+    .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 20px; margin-bottom: 20px; }
+    @media (max-width: 900px) {
+      .grid, .charts { grid-template-columns: 1fr; }
+    }
+    .card {
+      background: var(--card);
+      border: 1px solid var(--border);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    .card h2 { font-size: 1.1rem; margin-bottom: 16px; color: var(--muted); }
+    .chart-container { position: relative; height: 280px; }
+    .kline-container { height: 420px; margin-bottom: 20px; }
+    .kline-header {
+      display: flex; justify-content: space-between; align-items: center;
+      margin-bottom: 12px; flex-wrap: wrap; gap: 8px;
+    }
+    .kline-header select, .kline-header button {
+      background: #2d3748; color: var(--text); border: 1px solid var(--border);
+      padding: 6px 12px; border-radius: 6px; font-size: 0.875rem; cursor: pointer;
+    }
+    .kline-header button.active { background: var(--blue); border-color: var(--blue); }
+    .position {
+      display: flex; justify-content: space-between; align-items: center;
+      padding: 12px 0; border-bottom: 1px solid var(--border);
+    }
+    .position:last-child { border-bottom: none; }
+    .symbol { font-weight: 600; }
+    .side-long { color: var(--green); }
+    .side-short { color: var(--red); }
+    .pnl-pos { color: var(--green); }
+    .pnl-neg { color: var(--red); }
+    .event {
+      padding: 10px 0; border-bottom: 1px solid var(--border);
+      font-size: 0.9rem;
+    }
+    .event:last-child { border-bottom: none; }
+    .badge {
+      display: inline-block; padding: 2px 8px; border-radius: 4px;
+      font-size: 0.75rem; font-weight: 600;
+    }
+    .badge-open { background: #166534; color: #bbf7d0; }
+    .badge-close { background: #7f1d1d; color: #fecaca; }
+    .badge-change { background: #1e3a5f; color: #bfdbfe; }
+    .summary {
+      display: flex; gap: 24px; margin-bottom: 16px; font-size: 0.9rem;
+    }
+    .summary span { color: var(--muted); }
+    .empty { color: var(--muted); text-align: center; padding: 40px; }
+    .refresh { font-size: 0.8rem; color: var(--muted); }
+  </style>
+</head>
+<body>
+  <div class="container">
+    <header>
+      <h1>熬鹰资本 · 仓位监控</h1>
+      <div>
+        <span class="status" id="status">加载中...</span>
+        <span class="refresh" id="lastUpdate"></span>
+        <a href="/api/export" style="margin-left:16px;color:#3b82f6;font-size:0.875rem;text-decoration:none;">导出 CSV</a>
+      </div>
+    </header>
+
+    <!-- K线图表 -->
+    <div class="card kline-container">
+      <div class="kline-header">
+        <h2 style="margin:0">K线走势</h2>
+        <div>
+          <select id="symbolSelect" onchange="loadKline()"></select>
+          <button onclick="setInterval_('15m')" id="btn15m">15m</button>
+          <button onclick="setInterval_('1h')" id="btn1h" class="active">1h</button>
+          <button onclick="setInterval_('4h')" id="btn4h">4h</button>
+          <button onclick="setInterval_('1d')" id="btn1d">1d</button>
+        </div>
+      </div>
+      <div id="klineChart" style="height:360px;"></div>
+    </div>
+
+    <div class="charts">
+      <div class="card">
+        <h2>持仓名义分布</h2>
+        <div class="chart-container">
+          <canvas id="notionalChart"></canvas>
+        </div>
+      </div>
+      <div class="card">
+        <h2>浮盈对比</h2>
+        <div class="chart-container">
+          <canvas id="pnlChart"></canvas>
+        </div>
+      </div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>当前持仓</h2>
+        <div class="summary" id="summary"></div>
+        <div id="positions"><div class="empty">加载中...</div></div>
+      </div>
+      <div class="card">
+        <h2>最近事件</h2>
+        <div id="events"><div class="empty">加载中...</div></div>
+      </div>
+    </div>
+  </div>
+
+  <script>
+    const chartColors = [
+      "#3b82f6", "#22c55e", "#ef4444", "#f59e0b", "#8b5cf6",
+      "#06b6d4", "#ec4899", "#84cc16", "#f97316", "#6366f1"
+    ];
+
+    let notionalChart = null;
+    let pnlChart = null;
+    let klineChart = null;
+    let candleSeries = null;
+    let currentInterval = "1h";
+    let currentPositions = [];
+    let priceWs = null;
+    let livePrices = {};
+
+    function formatNum(n, digits = 0) {
+      if (n == null) return "-";
+      return Number(n).toLocaleString(undefined, { maximumFractionDigits: digits });
+    }
+    function formatTime(iso) {
+      if (!iso) return "";
+      const d = new Date(iso);
+      return d.toLocaleString("zh-CN", { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit" });
+    }
+
+    function initKlineChart() {
+      const container = document.getElementById("klineChart");
+      klineChart = LightweightCharts.createChart(container, {
+        layout: { background: { color: "#1a1f26" }, textColor: "#94a3b8" },
+        grid: { vertLines: { color: "#2d3748" }, horzLines: { color: "#2d3748" } },
+        crosshair: { mode: LightweightCharts.CrosshairMode.Normal },
+        rightPriceScale: { borderColor: "#2d3748" },
+        timeScale: { borderColor: "#2d3748", timeVisible: true, secondsVisible: false },
+        width: container.clientWidth,
+        height: 360,
+      });
+      candleSeries = klineChart.addCandlestickSeries({
+        upColor: "#22c55e",
+        downColor: "#ef4444",
+        borderUpColor: "#22c55e",
+        borderDownColor: "#ef4444",
+        wickUpColor: "#22c55e",
+        wickDownColor: "#ef4444",
+      });
+      window.addEventListener("resize", () => {
+        klineChart.applyOptions({ width: container.clientWidth });
+      });
+    }
+
+    async function loadKline() {
+      const symbol = document.getElementById("symbolSelect").value;
+      if (!symbol || !candleSeries) return;
+      try {
+        const res = await fetch(`/api/klines?symbol=${symbol}&interval=${currentInterval}&limit=150`);
+        const data = await res.json();
+        if (data.length) {
+          candleSeries.setData(data);
+          klineChart.timeScale().fitContent();
+        }
+      } catch (e) {
+        console.error("K线加载失败", e);
+      }
+    }
+
+    function setInterval_(iv) {
+      currentInterval = iv;
+      document.querySelectorAll(".kline-header button").forEach(b => b.classList.remove("active"));
+      document.getElementById("btn" + iv).classList.add("active");
+      loadKline();
+    }
+
+    function connectPriceWs(symbols) {
+      if (priceWs) priceWs.close();
+      if (!symbols.length) return;
+      const proto = location.protocol === "https:" ? "wss" : "ws";
+      priceWs = new WebSocket(`${proto}://${location.host}/ws/prices`);
+      priceWs.onopen = () => {
+        priceWs.send(JSON.stringify({ action: "subscribe", symbols }));
+        console.log("价格 WS 已连接");
+      };
+      priceWs.onmessage = (ev) => {
+        const data = JSON.parse(ev.data);
+        if (data.type === "markPrice") {
+          livePrices[data.symbol] = data.price;
+          updateLivePrice(data.symbol, data.price);
+        }
+      };
+      priceWs.onclose = () => {
+        setTimeout(() => connectPriceWs(Object.keys(livePrices).length ? Object.keys(livePrices) : symbols), 3000);
+      };
+    }
+
+    function updateLivePrice(symbol, price) {
+      document.querySelectorAll(`.live-price[data-symbol="${symbol}"]`).forEach(el => {
+        el.textContent = formatNum(price, price > 100 ? 2 : 4);
+      });
+    }
+
+    function updateSymbolSelect(positions) {
+      const select = document.getElementById("symbolSelect");
+      const symbols = [...new Set(positions.map(p => p.symbol))];
+      const prev = select.value;
+      select.innerHTML = symbols.map(s => `<option value="${s}">${s}</option>`).join("");
+      if (symbols.includes(prev)) select.value = prev;
+      if (symbols.length && !prev) loadKline();
+    }
+
+    function updateNotionalChart(positions) {
+      const labels = positions.map(p => `${p.symbol} ${p.side === "LONG" ? "多" : "空"}`);
+      const data = positions.map(p => p.notional || 0);
+      if (notionalChart) notionalChart.destroy();
+      const ctx = document.getElementById("notionalChart").getContext("2d");
+      notionalChart = new Chart(ctx, {
+        type: "doughnut",
+        data: {
+          labels,
+          datasets: [{ data, backgroundColor: chartColors.slice(0, labels.length), borderWidth: 0 }]
+        },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: {
+            legend: { position: "right", labels: { color: "#e2e8f0", font: { size: 12 } } },
+            tooltip: { callbacks: { label: (ctx) => `${ctx.label}: ${formatNum(ctx.raw)} U` } }
+          }
+        }
+      });
+    }
+
+    function updatePnlChart(positions) {
+      const labels = positions.map(p => p.symbol);
+      const data = positions.map(p => p.unrealized_pnl || 0);
+      const colors = data.map(v => v >= 0 ? "#22c55e" : "#ef4444");
+      if (pnlChart) pnlChart.destroy();
+      const ctx = document.getElementById("pnlChart").getContext("2d");
+      pnlChart = new Chart(ctx, {
+        type: "bar",
+        data: { labels, datasets: [{ label: "浮盈 (U)", data, backgroundColor: colors, borderRadius: 4 }] },
+        options: {
+          responsive: true, maintainAspectRatio: false,
+          plugins: { legend: { display: false }, tooltip: { callbacks: { label: (ctx) => `${formatNum(ctx.raw, 2)} U` } } },
+          scales: {
+            x: { ticks: { color: "#94a3b8" }, grid: { color: "#2d3748" } },
+            y: { ticks: { color: "#94a3b8" }, grid: { color: "#2d3748" } }
+          }
+        }
+      });
+    }
+
+    async function load() {
+      try {
+        const [posRes, evtRes] = await Promise.all([
+          fetch("/api/positions"),
+          fetch("/api/events?limit=30")
+        ]);
+        const positions = await posRes.json();
+        const events = await evtRes.json();
+        currentPositions = positions;
+
+        updateSymbolSelect(positions);
+
+        if (positions.length) {
+          updateNotionalChart(positions);
+          updatePnlChart(positions);
+        } else {
+          if (notionalChart) { notionalChart.destroy(); notionalChart = null; }
+          if (pnlChart) { pnlChart.destroy(); pnlChart = null; }
+        }
+
+        const posDiv = document.getElementById("positions");
+        const sumDiv = document.getElementById("summary");
+        if (!positions.length) {
+          posDiv.innerHTML = '<div class="empty">当前无持仓</div>';
+          sumDiv.innerHTML = "";
+        } else {
+          let totalNotional = 0, totalPnl = 0;
+          posDiv.innerHTML = positions.map(p => {
+            totalNotional += p.notional || 0;
+            totalPnl += p.unrealized_pnl || 0;
+            const sideClass = p.side === "LONG" ? "side-long" : "side-short";
+            const sideText = p.side === "LONG" ? "多" : "空";
+            const pnlClass = (p.unrealized_pnl || 0) >= 0 ? "pnl-pos" : "pnl-neg";
+            return `
+              <div class="position">
+                <div>
+                  <span class="symbol">${p.symbol}</span>
+                  <span class="${sideClass}"> ${sideText} ${p.leverage}x</span>
+                  <div style="font-size:0.85rem;color:var(--muted)">
+                    开仓 ${formatNum(p.entry_price, 4)} · 名义 ${formatNum(p.notional)} U
+                    · 现价 <span class="live-price" data-symbol="${p.symbol}">-</span>
+                  </div>
+                </div>
+                <div class="${pnlClass}" style="text-align:right">
+                  ${formatNum(p.unrealized_pnl, 2)} U<br>
+                  <small>${((p.roe || 0) * 100).toFixed(2)}%</small>
+                </div>
+              </div>`;
+          }).join("");
+          sumDiv.innerHTML = `
+            <span>合计名义 <b>${formatNum(totalNotional)} U</b></span>
+            <span>浮盈 <b class="${totalPnl >= 0 ? 'pnl-pos' : 'pnl-neg'}">${formatNum(totalPnl, 0)} U</b></span>
+          `;
+        }
+
+        const evtDiv = document.getElementById("events");
+        if (!events.length) {
+          evtDiv.innerHTML = '<div class="empty">暂无事件</div>';
+        } else {
+          evtDiv.innerHTML = events.map(e => {
+            const badge = { open: "badge-open", close: "badge-close", change: "badge-change" }[e.event_type] || "";
+            const label = { open: "开仓", close: "平仓", change: "变化" }[e.event_type] || e.event_type;
+            const side = e.side === "LONG" ? "多" : "空";
+            return `
+              <div class="event">
+                <span class="badge ${badge}">${label}</span>
+                <b>${e.symbol}</b> ${side} ${e.leverage || 1}x
+                <span style="color:var(--muted)"> · ${formatNum(e.notional)} U</span>
+                <span style="float:right;color:var(--muted)">${formatTime(e.created_at)}</span>
+              </div>`;
+          }).join("");
+        }
+
+        document.getElementById("status").textContent = "运行中";
+        document.getElementById("status").className = "status ok";
+        document.getElementById("lastUpdate").textContent = " · 更新于 " + new Date().toLocaleTimeString("zh-CN");
+
+        // 更新 WebSocket 订阅
+        const symbols = [...new Set(positions.map(p => p.symbol))];
+        if (symbols.length) connectPriceWs(symbols);
+      } catch (err) {
+        document.getElementById("status").textContent = "加载失败";
+        document.getElementById("status").className = "status";
+        console.error(err);
+      }
+    }
+
+    initKlineChart();
+    load();
+    setInterval(load, 15000);
+    setInterval(loadKline, 30000);
+  </script>
+</body>
+</html>
